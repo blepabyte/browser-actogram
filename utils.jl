@@ -1,0 +1,31 @@
+import Dates
+
+
+###
+
+
+"""
+    uncanonicalize(duration, unit)
+Converts any duration into a floating point value with unit (default: hours) given by the second parameter
+Calculations are performed at millisecond resolution. 
+"""
+uncanonicalize_period(C::Union{Dates.Period, Dates.CompoundPeriod}, unit=Dates.Hour) = Dates.toms(C) / (unit(1) / Dates.Millisecond(1))
+
+
+###
+
+
+vec_along(x::AbstractArray; dim) = reshape(x, Tuple(vcat(fill(1, dim-1), [:])))
+vec_along(x::Tuple; dim) = vec_along(collect(x); dim)
+vec_along(x::Integer; dim) = vec_along(1:x; dim)
+
+elementwise(f::Function, axes) = f.((vec_along(x; dim) for (dim, x) in enumerate(axes))...)
+
+fromfunction = elementwise # numpy-like alias
+
+export fromfunction, elementwise
+
+
+###
+
+
