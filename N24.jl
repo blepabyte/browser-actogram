@@ -32,5 +32,13 @@ include("./cycles.jl")
 end
 using .Cycles
 
+
+module Phases
+using ..N24
+include("./phases.jl")
+end
+using .Phases
+
+
 # end
 
