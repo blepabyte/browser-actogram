@@ -1,4 +1,5 @@
 using Dates, TimeZones
+using DataFrames
 
 const State = Tuple{Int, ZonedDateTime}
 
@@ -17,11 +18,20 @@ struct PhaseShift
 	shift::Int # signed hours
 end
 
+function PhaseShift(a::ZonedDateTime, b::ZonedDateTime)
+	# negative sign 
+	PhaseShift(-N24.uncanonicalize_period(b - a - Hour(24), exact=true))
+end
+
 # Advancement in circadian rhythm relative to a 24 hour day 
 Advance(h::Int) = PhaseShift(h)
 # Delay increases the period of the rhythm, so a "day"/cycle is longer
 Delay(h::Int) = PhaseShift(-h)
-"Time of cycle start, assuming `t` is cycle end/start of next cycle, and `s` was the shift"
+"""
+	(s::PhaseShift)(t::ZonedDateTime)
+Goes backwards to compute time of cycle start, assuming `t` is cycle end/start of next cycle, and `s` was the shift.
+Satisfies `PhaseShift(s(t), t) == s`.
+"""
 (s::PhaseShift)(t::ZonedDateTime) = t - Hour(24) + Hour(s.shift)
 
 # arbitrary, subject to change
@@ -117,7 +127,11 @@ end
 extract_best_path(P::PhaseEstimation) = extract_path(argmax(t -> P.states[(P.cycle, t)], P.considered_times))
 
 
-"Automatically compute phase estimation on the whole interval, given some high-level parameters"
+"""
+Contains result of phase estimation over a given interval
+
+Related functions: `frame(::PhaseEst)`
+"""
 struct PhaseEst
     path # consists of times of inferred "wake" events
     shifts
@@ -136,7 +150,7 @@ end
     PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedDateTime, start_lag_hours::Int=28, end_lag_hours::Int=32)
 Start lag defines the time period that the algorithm can choose the initial "wake time" from
 """
-function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedDateTime, start_lag_hours::Int=28, end_lag_hours::Int=36)
+function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedDateTime; start_lag_hours::Int=28, end_lag_hours::Int=36, POOL_SIZE::Int=48)
     # once a cycle has reached this point, it is finalised and will be part of the output
     end_cutoff = last_hour - Hour(end_lag_hours)
 
@@ -154,7 +168,7 @@ function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedD
     terminating_states::Dict{State, Float64} = Dict()
     
     while !isempty(P.considered_times)
-        consider.(Ref(P), P.considered_times)
+        foreach(t -> consider(P, t), P.considered_times)
     
         # assumes sorted
         if last(P.considered_times) >= end_cutoff
@@ -172,21 +186,24 @@ function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedD
         isempty(P.considered_times) && break
         
         # trim the fat; maybe keep constant instead of percentage?
-        if P.cycle > 1 && P.cycle % 28 == 0
+        if P.cycle > 1 && P.cycle % 28 == 0 && length(P.considered_times) > POOL_SIZE
             score_time = t -> P.states[(P.cycle, t)]
             considered_scores = P.considered_times .|> score_time
-            drop_threshold = maximum(considered_scores) * 0.9
+            # drop_threshold = maximum(considered_scores) * 0.9
             # surely there's a better way to write this
-            P.considered_times = P.considered_times[considered_scores .>= drop_threshold]
+			ordered_scores = sort(considered_scores)
+			keep_threshold = ordered_scores[length(ordered_scores) - POOL_SIZE + 1]
+			
+			pre_drop_count = length(P.considered_times)
+            P.considered_times = P.considered_times[considered_scores .>= keep_threshold]
+			post_drop_count = length(P.considered_times)
+			# @info "Pruned times: $pre_drop_count -> $post_drop_count"
         end
 
     	# generate considered times for next cycle
     	# NAIVE: uniformly expand shifted range
     	P.considered_times = next_cycle_range(extrema(P.considered_times)...)
 
-    	# TODO: prune the worst times, especially when they end up more than 24 hours behind better candidates
-        # or: just drop worst 90%
-	
     	P.cycle += 1
     end
     
@@ -201,6 +218,40 @@ function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedD
         N24.uncanonicalize_period(sum(diffs)) / length(diffs)
     )
 end
+
+
+"""
+	frame(P::PhaseEst)
+Conversion to a DataFrame for more convenient analysis
+"""
+function N24.frame(PE::PhaseEst)
+	transform!(
+		DataFrame(
+			# maximum(:cycle) gives total number of sleep-wake cycles
+			:cycle => collect(1:length(PE.path)-1),
+			:starts => PE.path[1:end-1],
+			:ends => PE.path[2:end],
+		),
+		Cols(:starts, :ends) => ((a, b) -> hcat(
+			Hour.(b .- a),
+			N24.PhaseShift.(a, b)
+		)) => [:duration, :phase_shift],
+	)
+end
+
+
+struct PhaseResponse
+	model
+end
+
+
+"""
+Given disjoint activity streams, constructs a generalised linear model for phase response to light
+"""
+function phase_response(sources...)
+	
+end
+
 
 export PhaseShift, Advance, Delay, PhaseEst
 
