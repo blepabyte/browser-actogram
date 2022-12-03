@@ -9,7 +9,13 @@ import Dates
 Converts any duration into a floating point value with unit (default: hours) given by the second parameter
 Calculations are performed at millisecond resolution. 
 """
-uncanonicalize_period(C::Union{Dates.Period, Dates.CompoundPeriod}, unit=Dates.Hour) = Dates.toms(C) / (unit(1) / Dates.Millisecond(1))
+uncanonicalize_period(C::Union{Dates.Period, Dates.CompoundPeriod}, unit=Dates.Hour; exact=false) = if exact
+    # type instability - probably shouldn't be used in hot loop
+    # would like, but can't guarantee that `toms` returns an integer
+    Int(Int(Dates.toms(C)) // Int(Dates.toms(unit(1))))
+else
+    Dates.toms(C) / Dates.toms(unit(1))
+end
 
 
 ###

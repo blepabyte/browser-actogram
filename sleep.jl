@@ -24,7 +24,7 @@ end
 
 """
 	contains_hour(si::SleepIntervalSequence, type=Awake)
-Returns a callable `T -> Bool` that checks whether a time is approximately contained in an interval of given `type`.
+Returns a callable `T -> Bool` that checks whether a time (rounded/floored to an exact hour) is approximately contained in an interval of given `type`.
 """
 function contains_hour(si::SleepIntervalSequence, type=Awake)
 	hours = Set()
@@ -53,6 +53,8 @@ function infer_sleep_intervals(activity_stream;
 	intervals::Vector{Union{Awake{T}, Asleep{T}}} = [Awake(last_t, last_t)]
 	while !isempty(it)
 		cur_t = popfirst!(it)
+		last_t > cur_t && error("Expected events to be sorted")
+		cur_t == last_t && continue  # ignore duplicate events
 		if (cur_t - last_t) < KEEP_AWAKE_DIFF
 			# continue same "wake" session
 			last(intervals).to = cur_t
@@ -109,4 +111,6 @@ end
 
 sleep_density_at(wi::SleepIntervalSequence, t, within=Minute(60 * 3)) = slice_intervals_within(wi, t, within) |> sleep_density
 
+
+export SleepIntervalSequence, infer_sleep_intervals
 

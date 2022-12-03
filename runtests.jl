@@ -7,18 +7,6 @@ module N24
 end
 using .N24
 
-module MockData
-	using Dates, TimeZones
-	sleep_hours() = sort(rand(collect(rand(5:9):rand(21:23)), 40)) # ~prob 0.95 of hitting any given bucket
-
-	function sample(days=60)
-		reduce(vcat, [
-			(ZonedDateTime(2022, tz"Pacific/Auckland") + Day(d)) .+ Hour.(sleep_hours())
-			for d in 1:days
-		])
-	end
-end
-
 @testset "phase conversions" begin
     s1 = Phases.Advance(3)
     s2 = Phases.Delay(3)
@@ -34,13 +22,16 @@ end
 end
 
 @testset "test functionality on sample data" begin
+    tol = 0.1 # 10% tolerance
+
     # Generate sample activity data with given parameters
-    days = 30
-    SAMPLE_TIMES = MockData.sample(days)
+    days = 60
+    SAMPLE_TIMES = N24.Sources.mock_data(days)
+
     
     SI = N24.infer_sleep_intervals(SAMPLE_TIMES)
-    # Should identify most sleep intervals. Test within 10% of expected days. 
-    @test days * 0.9 < length(SI.intervals)/2 < days * 1.1
+    # Should identify most sleep intervals. Test within tolerance% of expected days. 
+    @test days * (1 - tol) < length(SI.intervals)/2 < days * (1 + tol)
     
     # b = @benchmark N24.PhaseEst(
     #     N24.Sleep.contains_hour($SI),
@@ -55,5 +46,10 @@ end
     
     df_phase = N24.frame(PE)
     @test ["cycle", "starts", "ends", "phase_shift"] ⊆ names(df_phase)
+
+    # Checks sanity of sleep phase duration (sample data has obvious 24h rhythm)
+    @test 24 * (1 - tol) < N24.uncanonicalize_period(sum(df_phase.duration)) / size(df_phase, 1) < 24 * (1 + tol)
+
+    # @infiltrate
 end
 

@@ -5,15 +5,6 @@ const State = Tuple{Int, ZonedDateTime}
 
 # All times are floored to an hour boundary (minute value is zero). This reduces the number of states; as further precision is likely unnecessary given the nature of estimation
 
-mutable struct PhaseEstimation
-	states::Dict{State, Float64}
-	paths::Dict{State, State}
-	active::Function # returns 0 => inactive at time, 1 => active at time. assumes has been somewhat processed/smoothed from raw activity data
-	cycle::Int
-	considered_times::Vector{ZonedDateTime} # assume sorted
-end
-
-
 struct PhaseShift
 	shift::Int # signed hours
 end
@@ -35,49 +26,108 @@ Satisfies `PhaseShift(s(t), t) == s`.
 (s::PhaseShift)(t::ZonedDateTime) = t - Hour(24) + Hour(s.shift)
 
 # arbitrary, subject to change
-const PHASE_SCORES = Dict(
+const DEFAULT_PHASE_SCORES = Dict(
 	Advance(4) => 0.3,
 	Advance(3) => 0.5,
-	Advance(2) => 0.75,
-	Advance(1) => 0.90,
+	Advance(2) => 0.7,
+	Advance(1) => 0.9,
 	# Delay(0) == Advance(0)
 	Delay(0) => 1.0,
 	Delay(1) => 1.0,
-	Delay(2) => 0.95,
-	Delay(3) => 0.90,
-	Delay(4) => 0.85,
-	Delay(5) => 0.8,
-	Delay(6) => 0.5,
-	Delay(7) => 0.3,
+	Delay(2) => 0.9,
+	Delay(3) => 0.8,
+	Delay(4) => 0.7,
+	Delay(5) => 0.5,
+	Delay(6) => 0.3,
+	# Delay(7) => 0.3,
 )
 
 
-function advance_cycle(P::PhaseEstimation; final=false)
-	consider.(Ref(P), P.considered_times)
+### Trying out different alignment objectives
 
-	final && return
+# different scoring objectives for:
+# a) underlying circadian rhythm
+# b) actual sleep behaviour
 
-	# generate considered times for next cycle
-	# NAIVE: uniformly expand shifted range
-	a, b = extrema(P.considered_times)
-	P.considered_times = N24.Views.hour_span_view(
-		a + Hour(24 - 4),
-		b + Hour(24 + 7)
-	)
+abstract type AlignmentImpl end
 
-	# TODO: prune the worst times, especially when they end up more than 24 hours behind better candidates
-    # or: just drop worst 90%
-	
-	P.cycle += 1
+struct HammingAlignment <: AlignmentImpl
+	phase_scores::Dict
 end
+
+struct WakeAlignment <: AlignmentImpl
+	phase_scores::Dict
+end
+
+function align(A::HammingAlignment, active::Function, base_score::Float64, t::ZonedDateTime, s::PhaseShift)
+	# considers the interval [t1, t2] == [shift(t), t]
+	# span is inclusive, so activity in last hour is irrelevant
+	activity = N24.Views.hour_span_view(s(t), t - Hour(1)) .|> active
+	num_hours = length(activity)
+
+	# hamming distance against "typical". estimates a mix of (a) and (b)
+	wake_lag = 2
+	sample_sleep = vcat(
+		fill(0, wake_lag), # probably not using laptop immediately after waking up
+		fill(1, num_hours - (8 + wake_lag)),
+		fill(0, 8)
+	)
+	
+	ham_similarity = sum(activity .== sample_sleep) / length(activity) # in [0, 1]
+	base_score + ham_similarity * A.phase_scores[s]
+end
+
+function align(A::WakeAlignment, active::Function, base_score::Float64, t::ZonedDateTime, s::PhaseShift)
+	activity = N24.Views.hour_span_view(s(t), t - Hour(1)) .|> active
+	num_hours = length(activity)
+
+	wake_point = findfirst(activity)
+	wake_score = if wake_point == 1
+		# possibly woken up by alarm, so not predictive
+		0.2
+	elseif wake_point === nothing
+		# probable missing activity data
+		0
+	else
+		2 / (3 + abs(wake_point - 3))
+	end
+
+	sleep_point = findlast(!, activity)
+	sleep_score = if sleep_point === nothing
+		0
+	else
+		sleep_offset = sleep_point - (num_hours - 7)
+		sleep_offset > 0 ? 4 / (2 + sleep_offset) : 1 / (2 - sleep_offset)
+	end
+
+	activity_contrib = activity[3:min(length(activity), 3 + 12)]
+	activity_score = sum(activity_contrib) / length(activity_contrib)
+
+	m = 0.5
+	return base_score + A.phase_scores[s] * (2 + m * (wake_score + 0.5 * sleep_score + activity_score))
+end
+
+
+### Structs to keep track of and advance the dynamic programming state
+
+mutable struct PhaseEstimation{A <: AlignmentImpl}
+	states::Dict{State, Float64}
+	paths::Dict{State, State}
+	active::Function # returns 0 => inactive at time, 1 => active at time. assumes has been somewhat processed/smoothed from raw activity data
+	cycle::Int
+	considered_times::Vector{ZonedDateTime} # assume sorted
+	alignment_algorithm::A
+end
+
 
 function consider(P::PhaseEstimation, t::ZonedDateTime)
 	best_score, best_shift = findmax(Dict([
-		s => alignment(P, t, s) for s in keys(PHASE_SCORES)
+		s => alignment(P, t, s) for s in keys(P.alignment_algorithm.phase_scores)
 	]))
 	P.states[(P.cycle, t)] = best_score
 	P.paths[(P.cycle, t)] = (P.cycle - 1, best_shift(t))
 end
+
 
 "
 	alignment(P::PhaseEstimation, t::ZonedDateTime, s::PhaseShift)
@@ -87,28 +137,17 @@ function alignment(P::PhaseEstimation, t::ZonedDateTime, s::PhaseShift)
 	prev_t = s(t)
 	@assert prev_t < t
 
-	k = (P.cycle - 1, prev_t)
-	haskey(P.states, k) || return 0
-	base_score = P.states[k]
+	prev_state = (P.cycle - 1, prev_t)
+	base_score::Float64 = get(P.states, prev_state, -Inf)
+	base_score === -Inf && return 0
 
-	# span is inclusive, so activity in last hour is irrelevant
-	activity = N24.Views.hour_span_view(prev_t, t)[1:end-1] .|> P.active
-	num_hours = length(activity)
-
-	# scoring: different heuristics for
-	# a) underlying circadian rhythm
-	# b) actual sleep behaviour (estimated by largest contiguous block of inactivity)
-
-	# (a), NAIVE: hamming distance against "typical"
-	wake_lag = 2
-	sample_sleep = vcat(
-		fill(0, wake_lag), # probably not using laptop immediately after waking up
-		fill(1, num_hours - (8 + wake_lag)),
-		fill(0, 8)
+	return align(
+		P.alignment_algorithm,
+		P.active,
+		base_score,
+		t,
+		s
 	)
-	
-	ham_similarity = sum(activity .== sample_sleep) / length(activity) # in [0, 1]
-	base_score + ham_similarity * PHASE_SCORES[s]
 end
 
 
@@ -121,10 +160,6 @@ function extract_path(P::PhaseEstimation, state::State)
     reverse!(path)
     path
 end
-
-
-# mostly useless, only works for final cycle
-extract_best_path(P::PhaseEstimation) = extract_path(argmax(t -> P.states[(P.cycle, t)], P.considered_times))
 
 
 """
@@ -154,7 +189,7 @@ function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedD
     # once a cycle has reached this point, it is finalised and will be part of the output
     end_cutoff = last_hour - Hour(end_lag_hours)
 
-    P = PhaseEstimation(
+    P = PhaseEstimation{HammingAlignment}(
         Dict([
             (0, first_hour + Hour(h)) => 0
             for h in 0:start_lag_hours
@@ -162,7 +197,8 @@ function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedD
         Dict(),
         active,
         0,
-        next_cycle_range(first_hour, first_hour + Hour(start_lag_hours))
+        next_cycle_range(first_hour, first_hour + Hour(start_lag_hours)),
+		HammingAlignment(DEFAULT_PHASE_SCORES)
     )
     
     terminating_states::Dict{State, Float64} = Dict()

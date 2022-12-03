@@ -2,6 +2,15 @@
 
 include("./utils.jl")
 
+"""
+    frame(x::T)
+Convert the data in a struct to a DataFrame
+"""
+function frame()
+    # Stub method definition to be overriden by submodules
+    error("Not callable")
+end
+
 module Sources
 using ..N24
 include("./sources.jl")
@@ -39,6 +48,7 @@ include("./phases.jl")
 end
 using .Phases
 
+export Sources, Views, Events, Sleep, Cycles, Phases
 
 # end
 
