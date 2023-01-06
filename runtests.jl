@@ -1,4 +1,5 @@
-using Test, BenchmarkTools
+using Test
+# using BenchmarkTools
 
 using Dates, TimeZones
 
@@ -45,7 +46,7 @@ end
         )
     
     df_phase = N24.frame(PE)
-    @test ["cycle", "starts", "ends", "phase_shift"] ⊆ names(df_phase)
+    @test ["cycle", "starts", "ends", "duration", "phase_shift"] ⊆ names(df_phase)
 
     # Checks sanity of sleep phase duration (sample data has obvious 24h rhythm)
     @test 24 * (1 - tol) < N24.uncanonicalize_period(sum(df_phase.duration)) / size(df_phase, 1) < 24 * (1 + tol)

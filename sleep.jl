@@ -26,8 +26,8 @@ end
 	contains_hour(si::SleepIntervalSequence, type=Awake)
 Returns a callable `T -> Bool` that checks whether a time (rounded/floored to an exact hour) is approximately contained in an interval of given `type`.
 """
-function contains_hour(si::SleepIntervalSequence, type=Awake)
-	hours = Set()
+function contains_hour(si::SleepIntervalSequence{T}, type=Awake) where T
+	hours = Set{T}()
 	
 	for i in si.intervals
 		i isa type || continue
@@ -38,7 +38,7 @@ function contains_hour(si::SleepIntervalSequence, type=Awake)
 		end
 	end
 	
-	h -> (h in hours)
+	h::T -> (h in hours)
 end
 
 

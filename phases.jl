@@ -189,12 +189,13 @@ function PhaseEst(active::Function, first_hour::ZonedDateTime, last_hour::ZonedD
     # once a cycle has reached this point, it is finalised and will be part of the output
     end_cutoff = last_hour - Hour(end_lag_hours)
 
-    P = PhaseEstimation{HammingAlignment}(
+	# Type inference seems to be a bit unhappy with this constructor
+    P = PhaseEstimation(
         Dict([
-            (0, first_hour + Hour(h)) => 0
+            (0, first_hour + Hour(h)) => 0.
             for h in 0:start_lag_hours
         ]),
-        Dict(),
+        Dict{State, State}(),
         active,
         0,
         next_cycle_range(first_hour, first_hour + Hour(start_lag_hours)),
@@ -277,6 +278,8 @@ end
 
 
 struct PhaseResponse
+	df
+	groups::Vector{Symbol}
 	model
 end
 

@@ -10,8 +10,10 @@ Assumes first element of FFT output has been deleted. Probably better to encode 
 """
 fft_bucket_hour_period(num_hours::Int, bucket) = Minute(round(Int, 60 * num_hours / bucket)) |> Dates.canonicalize
 
+
 # TODO: Possible off-by-one errors... Check return size of rfft
 fft_periods(num_hours::Int) = fft_bucket_hour_period.(num_hours, 1:floor(Int, num_hours // 2 - 1))
+
 
 """
 Frequency components of input vector (as TimePeriods), assuming uniform samples at every hour
@@ -50,7 +52,16 @@ end
 # TODO: WIP
 
 
-function fft_freqs(time_column_names)
+struct MovingFreqs
+end
+
+
+struct FitSleepCycle{T}
+end
+
+
+# Runs prediction at a single frequency to try model underlying circadian rhythm (can that have multiple frequencies?)
+function FitSleepCycle{:fft}(e::N24.SleepIntervalSequence)
 
 end
 
